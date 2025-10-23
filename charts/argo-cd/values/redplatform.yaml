@@ -1,0 +1,106 @@
+global:
+  domain: argocd.rp-tools-prod.rvohealth.com
+  tolerations:
+    - key: CriticalAddonsOnly
+      operator: Exists
+      effect: NoSchedule
+
+
+configs:
+  params:
+    server.insecure: true
+  
+  # AWS Cognito SSO Configuration
+  cm:
+    # OIDC configuration for AWS Cognito
+    oidc.config: |
+      name: AWS Cognito
+      issuer: https://cognito-idp.us-east-1.amazonaws.com/us-east-1_VAPDmmfVL
+      clientID: gqcce57dec1bkh3iud5roiapc
+      clientSecret: $oidc.cognito.clientSecret
+      requestedScopes:
+        - openid
+        - profile
+        - email
+      requestedIDTokenClaims:
+        cognito:groups:
+          essential: true
+  
+  # Store the Cognito client secret
+  secret:
+    extra:
+      oidc.cognito.clientSecret: <YOUR_COGNITO_APP_CLIENT_SECRET>
+  
+  # RBAC Configuration
+  rbac:
+    # Map Cognito groups to ArgoCD roles
+    scopes: "[cognito:groups]"
+    policy.csv: |
+      # Define the readonly role with read-only permissions
+      p, role:readonly, applications, get, */*, allow
+      p, role:readonly, applications, list, */*, allow
+      p, role:readonly, clusters, get, *, allow
+      p, role:readonly, clusters, list, *, allow
+      p, role:readonly, projects, get, *, allow
+      p, role:readonly, projects, list, *, allow
+      p, role:readonly, repositories, get, *, allow
+      p, role:readonly, repositories, list, *, allow
+      p, role:readonly, logs, get, *, allow
+      
+      # Define the admin role with full permissions
+      p, role:admin, applications, *, */*, allow
+      p, role:admin, applicationsets, *, */*, allow
+      p, role:admin, clusters, *, *, allow
+      p, role:admin, projects, *, *, allow
+      p, role:admin, repositories, *, *, allow
+      p, role:admin, logs, *, *, allow
+      p, role:admin, exec, *, */*, allow
+      p, role:admin, accounts, *, *, allow
+      p, role:admin, gpgkeys, *, *, allow
+      p, role:admin, certificates, *, *, allow
+      
+      # Map Cognito groups to roles
+      # Replace these with your actual Cognito group names
+      g, argocd-users, role:readonly
+      g, argocd-admins, role:admin
+
+server:
+  ingress:
+    enabled: true
+    controller: aws
+    ingressClassName: alb
+    annotations:
+      # AWS ALB Configuration
+      alb.ingress.kubernetes.io/scheme: internet-facing
+      alb.ingress.kubernetes.io/target-type: ip
+      alb.ingress.kubernetes.io/backend-protocol: HTTP
+      alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}, {"HTTPS":443}]'
+      alb.ingress.kubernetes.io/ssl-redirect: '443'
+      alb.ingress.kubernetes.io/load-balancer-name: "argocd-alb"
+      alb.ingress.kubernetes.io/certificate-arn: "arn:aws:acm:us-east-1:803669523933:certificate/4b16e496-a8ba-43e5-ab1b-810017aec3b5"
+      alb.ingress.kubernetes.io/subnets: "subnet-028daa7a40af33dd9,subnet-0169b26a5960b1fd8,subnet-0be10473dfb51e7c1"
+      # External DNS Configuration
+      external-dns.alpha.kubernetes.io/hostname: argocd.rp-tools-prod.rvohealth.com
+      external-dns.alpha.kubernetes.io/ttl: "300"
+    aws:
+      serviceType: ClusterIP
+      backendProtocolVersion: GRPC
+
+redis-ha:
+  enabled: true
+
+controller:
+  replicas: 1
+
+server:
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+
+repoServer:
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+
+applicationSet:
+  replicas: 2
