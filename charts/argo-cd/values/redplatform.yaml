@@ -20,6 +20,8 @@ configs:
       issuer: https://cognito-idp.us-east-1.amazonaws.com/us-east-1_VAPDmmfVL
       clientID: 59iua2rsejtdhbna06qr6fbn4m
       clientSecret: $oidc.cognito.clientSecret
+      cliClientID: 3hgo4qbvm63b011jk50830774j
+      enablePKCEAuthentication: true
       requestedScopes:
         - openid
         - profile

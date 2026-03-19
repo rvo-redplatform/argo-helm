@@ -1,330 +1,243 @@
-# AWS Cognito SSO Setup for ArgoCD
+# AWS Cognito SSO Setup for ArgoCD with Okta Federation
 
-This guide walks you through setting up AWS Cognito for SSO authentication with ArgoCD, including RBAC configuration for read-only users and admin users.
+This guide documents the complete setup of AWS Cognito SSO for ArgoCD with Okta SAML federation, including the ArgoCD CLI configuration.
 
-## Overview
+## Architecture Overview
 
-The configuration creates two access levels:
+```
+User Browser/CLI
+    │
+    ├── Web UI: Browser → ALB (443) → ArgoCD Server → Cognito → Okta (SAML)
+    │                                  (confidential client, with secret)
+    │
+    └── CLI:    argocd login --sso → localhost:8085 → Cognito → Okta (SAML)
+                                     (public client, PKCE only, no secret)
+```
+
+Two Cognito app clients are required:
+- **argocd** (confidential): Used by the ArgoCD server for web UI login. Has a client secret.
+- **argocd-cli** (public): Used by the ArgoCD CLI for local SSO login. No secret, secured via PKCE.
+
+## Access Levels
+
 - **argocd-users**: Read-only access to applications, clusters, projects, repositories, and logs
 - **argocd-admins**: Full administrative access to all ArgoCD resources
 
 ## Prerequisites
 
-- AWS Account with access to Cognito
-- ArgoCD Helm chart deployed
-- Your ArgoCD domain configured (already set: `argocd.rp-tools-prod.rvohealth.com`)
+- AWS Account with Cognito User Pool
+- Okta SAML application configured
+- ArgoCD Helm chart deployed on EKS
+- AWS ALB Ingress Controller
+- External DNS Controller
 
-## Step 1: Create AWS Cognito User Pool
+## Cognito Configuration
 
-1. Navigate to **AWS Cognito Console**
-2. Click **Create user pool**
-3. Configure sign-in options:
-   - Select **Email** as sign-in option
-   - Enable **Also allow sign in with preferred username**
-4. Configure security requirements as needed
-5. Configure sign-up experience (optional)
-6. Configure message delivery (use Cognito defaults or SES)
-7. **Important**: Add custom attributes or leave as default
-8. Give your user pool a name (e.g., `argocd-users`)
-9. Create the user pool
+### User Pool
 
-## Step 2: Configure App Client
+Managed via Terraform in `tfe_redplatform-tools/core/production/us-east-1/cognito.tf`:
 
-1. In your User Pool, go to **App integration** tab
-2. Click **Create app client**
-3. Configure the app client:
-   - **App client name**: `argocd`
-   - **Authentication flows**: Select **ALLOW_USER_PASSWORD_AUTH** and **ALLOW_REFRESH_TOKEN_AUTH**
-   - **App client secret**: Generate a client secret (you'll need this later)
-4. Under **Hosted UI settings**:
-   - **Allowed callback URLs**: 
-     ```
-     https://argocd.rp-tools-prod.rvohealth.com/auth/callback
-     https://argocd.rp-tools-prod.rvohealth.com/pkce/verify
-     ```
-   - **Allowed sign-out URLs**: 
-     ```
-     https://argocd.rp-tools-prod.rvohealth.com
-     ```
-   - **Identity providers**: Select **Cognito user pool**
-   - **OAuth 2.0 grant types**: Select **Authorization code grant**
-   - **OpenID Connect scopes**: Select:
-     - `openid`
-     - `profile`
-     - `email`
-     `
-5. Click **Create app client**
+```hcl
+module "rp-tools-prod-cognito" {
+  source    = "git@github.com:rvo-redplatform/terraform-aws-cognito.git?ref=v1.0.1"
+  pool_name = "rp-tools-prod"
 
-## Step 3: Create Cognito Groups
+  # Okta SAML Federation
+  okta_attach_to_user_pool      = true
+  okta_metadata_url             = "https://sso.rvohealth.com/app/<APP_ID>/sso/saml/metadata"
+  okta_sso_redirect_binding_uri = "https://sso.rvohealth.com/app/<APP_NAME>/<APP_ID>/sso/saml"
 
-1. In your User Pool, go to the **Groups** tab
-2. Create two groups:
+  client_configurations = {
+    # Confidential client for ArgoCD web UI (server-side token exchange)
+    argocd = {
+      name                                 = "argocd"
+      allowed_oauth_flows_user_pool_client = true
+      allowed_oauth_flows                  = ["code", "implicit"]
+      allowed_oauth_scopes                 = ["openid", "email", "profile"]
+      generate_secret                      = true
+      enable_token_revocation              = true
+      callback_urls                        = [
+        "https://argocd.rp-tools-prod.rvohealth.com/auth/callback",
+        "https://argocd.rp-tools-prod.rvohealth.com/pkce/verify"
+      ]
+    }
+    # Public client for ArgoCD CLI (PKCE, no secret)
+    argocd-cli = {
+      name                                 = "argocd-cli"
+      allowed_oauth_flows_user_pool_client = true
+      allowed_oauth_flows                  = ["code"]
+      allowed_oauth_scopes                 = ["openid", "email", "profile"]
+      generate_secret                      = false
+      enable_token_revocation              = true
+      callback_urls                        = ["http://localhost:8085/auth/callback"]
+    }
+  }
+}
+```
 
-   **Group 1: argocd-users (Read-only)**
-   - Group name: `argocd-users`
-   - Description: `ArgoCD read-only users`
-   - Precedence: `1`
-   
-   **Group 2: argocd-admins (Full Admin)**
-   - Group name: `argocd-admins`
-   - Description: `ArgoCD administrators`
-   - Precedence: `0` (lower number = higher precedence)
+### Why Two Clients?
 
-## Step 4: Create Users and Assign to Groups
+The ArgoCD CLI exchanges authorization codes directly with Cognito from the local machine using PKCE (no client secret). Cognito confidential clients (with `generate_secret = true`) require the secret on every token exchange. Since the CLI has no access to the secret, a separate public client is needed.
 
-1. In your User Pool, go to the **Users** tab
-2. Click **Create user**
-3. Enter user details:
-   - Email address
-   - Set temporary password or send invitation
-4. Click **Create user**
-5. After creating users, click on each user
-6. Click **Add user to group**
-7. Select either `argocd-users` or `argocd-admins`
+**Source**: ArgoCD source code `cmd/argocd/commands/login.go` - the CLI's `oauth2.Config` has an empty `ClientSecret` field and relies on PKCE (`code_challenge` + `code_verifier`).
 
-## Step 5: Get Required Configuration Values
+## Okta SAML App Configuration
 
-You'll need these values from your Cognito setup:
+In the Okta admin console, configure the SAML app with:
 
-1. **User Pool ID**: 
-   - Found in User Pool overview page
-   - Format: `us-east-1_aBcD1234`
+| Field | Value |
+|-------|-------|
+| **Single sign-on URL** | `https://<COGNITO_DOMAIN>.auth.<REGION>.amazoncognito.com/saml2/idpresponse` |
+| **Use this for Recipient URL and Destination URL** | Checked |
+| **Audience URI (SP Entity ID)** | `urn:amazon:cognito:sp:<USER_POOL_ID>` |
+| **Default RelayState** | Leave blank |
+| **Name ID format** | `Unspecified` |
+| **Application username** | `Okta username` |
 
-2. **AWS Region**: 
-   - The region where your User Pool is created
-   - Example: `us-east-1`
+### Attribute Mapping in Cognito
 
-3. **App Client ID**:
-   - Go to **App integration** > **App clients**
-   - Copy the **Client ID**
-   - Format: `1a2b3c4d5e6f7g8h9i0j1k2l3m`
+| User pool attribute | SAML attribute |
+|---|---|
+| email | `http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress` |
+| family_name | `lastName` |
+| given_name | `firstName` |
 
-4. **App Client Secret**:
-   - In the same App client details page
-   - Click **Show client secret**
-   - Copy the secret value
+## ArgoCD Helm Values Configuration
 
-5. **Issuer URL**:
-   - Format: `https://cognito-idp.<REGION>.amazonaws.com/<USER_POOL_ID>`
-   - Example: `https://cognito-idp.us-east-1.amazonaws.com/us-east-1_aBcD1234`
-
-## Step 6: Update ArgoCD Values File
-
-Update your `values/redplatform.yaml` file with your Cognito values:
+In `values/redplatform.yaml`:
 
 ```yaml
 configs:
+  params:
+    server.insecure: true  # TLS terminated at ALB
+
   cm:
+    admin.enabled: false
     oidc.config: |
       name: AWS Cognito
-      issuer: https://cognito-idp.<YOUR_AWS_REGION>.amazonaws.com/<YOUR_USER_POOL_ID>
-      clientID: <YOUR_APP_CLIENT_ID>
+      issuer: https://cognito-idp.<REGION>.amazonaws.com/<USER_POOL_ID>
+      clientID: <CONFIDENTIAL_CLIENT_ID>
       clientSecret: $oidc.cognito.clientSecret
+      cliClientID: <PUBLIC_CLI_CLIENT_ID>
+      enablePKCEAuthentication: true
       requestedScopes:
         - openid
         - profile
         - email
-        - aws.cognito.signin.user.admin
       requestedIDTokenClaims:
         cognito:groups:
           essential: true
-  
-  secret:
-    extra:
-      oidc.cognito.clientSecret: <YOUR_COGNITO_APP_CLIENT_SECRET>
-  
+
   rbac:
     scopes: "[cognito:groups]"
     policy.csv: |
-      # Define the readonly role with read-only permissions
-      p, role:readonly, applications, get, */*, allow
-      p, role:readonly, applications, list, */*, allow
-      p, role:readonly, clusters, get, *, allow
-      p, role:readonly, clusters, list, *, allow
-      p, role:readonly, projects, get, *, allow
-      p, role:readonly, projects, list, *, allow
-      p, role:readonly, repositories, get, *, allow
-      p, role:readonly, repositories, list, *, allow
-      p, role:readonly, logs, get, *, allow
-      
-      # Define the admin role with full permissions
-      p, role:admin, applications, *, */*, allow
-      p, role:admin, applicationsets, *, */*, allow
-      p, role:admin, clusters, *, *, allow
-      p, role:admin, projects, *, *, allow
-      p, role:admin, repositories, *, *, allow
-      p, role:admin, logs, *, *, allow
-      p, role:admin, exec, *, */*, allow
-      p, role:admin, accounts, *, *, allow
-      p, role:admin, gpgkeys, *, *, allow
-      p, role:admin, certificates, *, *, allow
-      
-      # Map Cognito groups to roles
       g, argocd-users, role:readonly
       g, argocd-admins, role:admin
 ```
 
-**Important**: Replace the placeholders with your actual values:
-- `<YOUR_AWS_REGION>` - e.g., `us-east-1`
-- `<YOUR_USER_POOL_ID>` - e.g., `us-east-1_aBcD1234`
-- `<YOUR_APP_CLIENT_ID>` - e.g., `1a2b3c4d5e6f7g8h9i0j1k2l3m`
-- `<YOUR_COGNITO_APP_CLIENT_SECRET>` - The client secret value
+### Important Notes
 
-## Step 7: Configure External DNS for ALB
+- **Do NOT include `aws.cognito.signin.user.admin` scope** - Cognito hosted UI rejects it via OAuth flow, returns `invalid_scope`.
+- **`cliClientID`** must point to the public client (no secret). Without this, CLI login fails with `invalid_client_secret`.
+- **`enablePKCEAuthentication: true`** enables PKCE for both web and CLI flows.
 
-The configuration includes External DNS annotations that will automatically create a Route53 DNS record pointing to your ALB:
+## Client Secret Management
 
-```yaml
-annotations:
-  # External DNS Configuration
-  external-dns.alpha.kubernetes.io/hostname: argocd.rp-tools-prod.rvohealth.com
-  external-dns.alpha.kubernetes.io/ttl: "300"
-```
-
-**How External DNS Works:**
-1. When the ArgoCD Ingress is created, the AWS ALB Controller provisions an Application Load Balancer
-2. The External DNS controller watches for Ingress resources with `external-dns.alpha.kubernetes.io/hostname` annotation
-3. It automatically creates an A record (or ALIAS record) in Route53 pointing to the ALB DNS name
-4. The TTL of 300 seconds (5 minutes) controls DNS caching duration
-
-**Prerequisites:**
-- AWS External DNS Controller must be deployed in your cluster
-- The External DNS service account must have IAM permissions to manage Route53 records:
-  - `route53:ChangeResourceRecordSets`
-  - `route53:ListResourceRecordSets`
-  - `route53:GetHostedZone`
-  - `route53:ListHostedZones`
-
-## Step 8: Deploy ArgoCD with Updated Configuration
+The confidential client secret must be stored in the `argocd-secret` Kubernetes secret:
 
 ```bash
-# Navigate to the chart directory
-cd charts/argo-cd
+# Get the secret from Cognito
+SECRET=$(aws cognito-idp describe-user-pool-client \
+  --user-pool-id <USER_POOL_ID> \
+  --client-id <CONFIDENTIAL_CLIENT_ID> \
+  --query 'UserPoolClient.ClientSecret' \
+  --output text \
+  --region <REGION>)
 
-# Install or upgrade ArgoCD with your custom values
-helm upgrade --install argocd . \
-  --namespace argocd \
-  --create-namespace \
-  -f values/redplatform.yaml
+# Patch the argocd-secret
+kubectl patch secret argocd-secret -n argocd \
+  --type merge \
+  -p "{\"stringData\":{\"oidc.cognito.clientSecret\":\"$SECRET\"}}"
 ```
 
-After deployment, verify the DNS record was created:
+ArgoCD references this via `$oidc.cognito.clientSecret` in the OIDC config and looks it up in the `argocd-secret` automatically.
+
+## CLI Login
 
 ```bash
-# Check External DNS logs
-kubectl logs -n kube-system -l app.kubernetes.io/name=external-dns
+# Standard login (behind Zscaler or proxy that breaks HTTP/2, use --grpc-web)
+argocd login argocd.rp-tools-prod.rvohealth.com --skip-test-tls --sso --grpc-web
 
-# Verify Route53 record (replace with your hosted zone ID)
-aws route53 list-resource-record-sets --hosted-zone-id <YOUR_HOSTED_ZONE_ID> \
-  --query "ResourceRecordSets[?Name=='argocd.rp-tools-prod.rvohealth.com.']"
+# If gRPC works natively (no proxy interference)
+argocd login argocd.rp-tools-prod.rvohealth.com --sso
 ```
 
-## Step 9: Test SSO Login
+The `--skip-test-tls` flag prevents the CLI from hanging on a TLS connectivity test. The `--grpc-web` flag wraps gRPC in HTTP/1.1 which is needed when a proxy (like Zscaler) strips HTTP/2 ALPN negotiation.
 
-1. Navigate to `https://argocd.rp-tools-prod.rvohealth.com`
-2. You should see a **LOGIN VIA AWS COGNITO** button
-3. Click the button and sign in with your Cognito credentials
-4. After successful authentication, you'll be redirected back to ArgoCD
+### How CLI SSO Works
 
-## Verify RBAC Permissions
+1. CLI contacts ArgoCD server to get OIDC config (including `cliClientID`)
+2. CLI starts a temporary HTTP server on `localhost:8085`
+3. CLI opens browser to Cognito authorize endpoint using the **public client ID**
+4. User authenticates via Okta
+5. Cognito redirects browser to `http://localhost:8085/auth/callback` with authorization code
+6. CLI exchanges code directly with Cognito using **PKCE** (no secret)
+7. CLI receives ID token and stores it locally
 
-### For Read-Only Users (argocd-users group):
-- Can view applications, clusters, projects, and repositories
-- Can view logs
-- **Cannot** create, update, or delete resources
-- **Cannot** sync applications
-- **Cannot** access exec terminal
+## Deployment
 
-### For Admin Users (argocd-admins group):
-- Full access to all ArgoCD resources
-- Can create, update, and delete applications
-- Can manage clusters, projects, and repositories
-- Can sync applications
-- Can access exec terminal
-- Can manage accounts, GPG keys, and certificates
+```bash
+# From argo-helm/charts/argo-cd/values directory
+helm upgrade argocd .. -n argocd -f redplatform.yaml
+```
 
 ## Troubleshooting
 
-### SSO Button Not Appearing
-- Check that the OIDC configuration is properly set in the ConfigMap
-- Verify the ArgoCD server pods have restarted after configuration changes
-- Check ArgoCD server logs: `kubectl logs -n argocd -l app.kubernetes.io/name=argocd-server`
+### `invalid_scope` Error on Login
 
-### Authentication Fails
-- Verify the callback URL in Cognito matches your ArgoCD domain exactly
-- Check that the client ID and client secret are correct
-- Ensure the user pool ID and region are correct in the issuer URL
-- Verify the OAuth scopes include `aws.cognito.signin.user.admin`
+The `aws.cognito.signin.user.admin` scope is not supported via the Cognito hosted UI OAuth flow. Remove it from `requestedScopes`.
 
-### User Has Wrong Permissions
-- Verify the user is in the correct Cognito group (`argocd-users` or `argocd-admins`)
-- Check the ArgoCD RBAC ConfigMap: `kubectl get cm argocd-rbac-cm -n argocd -o yaml`
-- Verify the group name in Cognito matches exactly with the policy.csv configuration
-- The scope configuration must be `[cognito:groups]` to read groups from Cognito
+### `invalid_client_secret` Error on CLI Login
 
-### Groups Not Being Passed from Cognito
-- Ensure `aws.cognito.signin.user.admin` scope is requested
-- Verify `requestedIDTokenClaims` includes `cognito:groups: essential: true`
-- Check that the app client has access to the groups scope in Cognito
+The CLI does not send a client secret. If the CLI is using the confidential client ID (the one with `generate_secret = true`), Cognito rejects the request. Fix: set `cliClientID` in the OIDC config to a separate public client.
 
-## Security Best Practices
+### `context deadline exceeded` on CLI Login
 
-1. **Use AWS Secrets Manager**: Instead of storing the client secret in the values file, consider using AWS Secrets Manager or Kubernetes External Secrets
-2. **Enable MFA**: Enable multi-factor authentication in Cognito for admin users
-3. **Regular Audits**: Regularly review group memberships and permissions
-4. **Least Privilege**: Start with read-only access and grant admin access only as needed
-5. **Monitor Access**: Enable CloudTrail logging for Cognito authentication events
+Multiple possible causes:
+1. **gRPC connectivity**: Use `--grpc-web` flag. Proxies like Zscaler break HTTP/2.
+2. **TLS test hanging**: Use `--skip-test-tls` flag.
+3. **Callback URL not allowed**: Ensure `http://localhost:8085/auth/callback` is in the public client's callback URLs.
 
-## Advanced Configuration
+### 403 Forbidden on Cognito Hosted UI
 
-### Adding More Custom Roles
+- Verify the Okta SAML IdP is associated with the app client
+- Check callback URLs match exactly
+- Verify OAuth grant types and scopes are configured
 
-You can create additional roles with specific permissions. For example, a "developer" role with deployment permissions but no cluster management:
+### Web UI SSO Works But CLI Fails
 
-```yaml
-# Add to policy.csv
-p, role:developer, applications, get, */*, allow
-p, role:developer, applications, sync, */*, allow
-p, role:developer, applications, override, */*, allow
-p, role:developer, logs, get, *, allow
-g, argocd-developers, role:developer
-```
+This is expected if `cliClientID` is not configured. The web UI uses the confidential client (server-side token exchange with secret), while the CLI exchanges tokens directly without a secret. See "Why Two Clients?" above.
 
-Then create an `argocd-developers` group in Cognito.
+### ALB 464 Error on gRPC
 
-### Project-Specific Permissions
+The ALB returns 464 when backend protocol doesn't match. With `server.insecure: true`, ArgoCD serves HTTP/1.1. The gRPC target group protocol version must be set to `GRPC` with `HTTPS` protocol. If using insecure mode, the gRPC target group cannot properly forward gRPC traffic. Use `--grpc-web` to wrap gRPC in HTTP/1.1.
 
-Restrict access to specific ArgoCD projects:
+## Cognito Groups
 
-```yaml
-# Allow role:team-a only to access team-a project
-p, role:team-a, applications, *, team-a/*, allow
-p, role:team-a, repositories, get, *, allow
-g, argocd-team-a, role:team-a
-```
+Create groups in the Cognito User Pool to map to ArgoCD roles:
 
-## External DNS Troubleshooting
-
-### DNS Record Not Created
-- Check External DNS logs: `kubectl logs -n kube-system -l app.kubernetes.io/name=external-dns`
-- Verify the External DNS controller is running and has proper IAM permissions
-- Ensure the hostname annotation is correctly formatted
-- Check that the Route53 hosted zone exists and matches your domain
-
-### DNS Record Points to Wrong Target
-- External DNS creates an ALIAS record pointing to the ALB DNS name
-- Verify the ALB was created successfully: `kubectl get ingress -n argocd`
-- Check ALB status in AWS Console
+| Cognito Group | ArgoCD Role | Access |
+|---|---|---|
+| `argocd-users` | `role:readonly` | View applications, clusters, projects, repos, logs |
+| `argocd-admins` | `role:admin` | Full access to all ArgoCD resources |
 
 ## References
 
-- [ArgoCD RBAC Documentation](https://argo-cd.readthedocs.io/en/stable/operator-manual/rbac/)
-- [ArgoCD SSO Configuration](https://argo-cd.readthedocs.io/en/stable/operator-manual/user-management/)
-- [ArgoCD Ingress Configuration](https://argo-cd.readthedocs.io/en/latest/operator-manual/ingress/)
-- [AWS Cognito Documentation](https://docs.aws.amazon.com/cognito/)
-- [OIDC Configuration Guide](https://argo-cd.readthedocs.io/en/stable/operator-manual/user-management/#oidc)
-- [External DNS Documentation](https://kubernetes-sigs.github.io/external-dns/)
-- [External DNS AWS Tutorial](https://kubernetes-sigs.github.io/external-dns/v0.15.0/docs/tutorials/aws/)
-- [AWS Load Balancer Controller Documentation](https://kubernetes-sigs.github.io/aws-load-balancer-controller/)
-- [Setting Up ArgoCD with HTTPS on Kubernetes Using AWS ALB](https://medium.com/@tanmoysantra67/setting-up-argocd-with-https-on-kubernetes-using-aws-alb-d29e58b80d72)
-
+- [ArgoCD OIDC Configuration](https://argo-cd.readthedocs.io/en/stable/operator-manual/user-management/#existing-oidc-provider)
+- [ArgoCD TLS Configuration](https://argo-cd.readthedocs.io/en/stable/operator-manual/tls/)
+- [ArgoCD Ingress Configuration (ALB)](https://argo-cd.readthedocs.io/en/stable/operator-manual/ingress/#aws-application-load-balancers-albs-and-classic-elb-http-mode)
+- [ArgoCD CLI Login Reference](https://argo-cd.readthedocs.io/en/stable/user-guide/commands/argocd_login/)
+- [ArgoCD RBAC Configuration](https://argo-cd.readthedocs.io/en/stable/operator-manual/rbac/)
+- [AWS Cognito SAML Federation](https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-pools-saml-idp.html)
+- [RFC 8252 - OAuth 2.0 for Native Applications](https://datatracker.ietf.org/doc/html/rfc8252)
+- [AWS ALB Target Group Protocol Versions](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-target-groups.html#target-group-protocol-version)
