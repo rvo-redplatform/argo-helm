@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 while getopts c:d:v: opt; do
   case ${opt} in
     c) chart=${OPTARG} ;;
@@ -39,3 +39,26 @@ sed -i -e '/^  artifacthub.io\/changes: |/,$ d' "${chart_yaml_path}"
   echo "      description: Bump ${dependency_name} to ${dependency_version}"
 } >> "${chart_yaml_path}"
 cat "${chart_yaml_path}"
+
+# If the dependency is argo-workflows, also update CRDs
+if [[ "$dependency_name" == "argo-workflows" ]]; then
+  "$(dirname "$0")/update-argo-workflows-crds.sh" "$dependency_version"
+fi
+
+# If the dependency is argo-events, also update CRDs
+if [[ "$dependency_name" == "argo-events" ]]; then
+  "$(dirname "$0")/update-argo-events-crds.sh" "$dependency_version"
+
+# If the dependency is argo-rollouts, also update CRDs
+if [[ "$dependency_name" == "argo-rollouts" ]]; then
+  "$(dirname "$0")/update-argo-rollouts-crds.sh" "$dependency_version"
+
+# If the dependency is argo-cd, also update CRDs
+if [[ "$dependency_name" == "argo-cd" ]]; then
+  "$(dirname "$0")/update-argo-cd-crds.sh" "$dependency_version"
+fi
+
+# If the dependency is argocd-image-updater, also update CRDs
+if [[ "$dependency_name" == "argocd-image-updater" ]]; then
+  "$(dirname "$0")/update-argocd-image-updater-crds.sh" "$dependency_version"
+fi

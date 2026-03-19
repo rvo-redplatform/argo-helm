@@ -1,3 +1,4 @@
+{{- if .Values.ingress.enabled }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -40,7 +41,7 @@ spec:
     - name: {{ .Values.service.servicePortHttpName }}
       protocol: TCP
       port: {{ .Values.service.port }}
-      targetPort: {{ .Values.containerPort }}
+      targetPort: webhook
       {{- if eq .Values.service.type "NodePort" }}
       nodePort: {{ .Values.service.nodePortHttp }}
       {{- end }}
@@ -49,3 +50,4 @@ spec:
     {{- end }}
   selector:
     {{- include "argocd-image-updater.selectorLabels" . | nindent 4 }}
+{{- end }}
