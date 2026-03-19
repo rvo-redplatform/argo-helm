@@ -12,11 +12,13 @@ configs:
   
   # AWS Cognito SSO Configuration
   cm:
+    # Disable local admin user - force SSO login only
+    admin.enabled: false
     # OIDC configuration for AWS Cognito
     oidc.config: |
       name: AWS Cognito
       issuer: https://cognito-idp.us-east-1.amazonaws.com/us-east-1_VAPDmmfVL
-      clientID: gqcce57dec1bkh3iud5roiapc
+      clientID: 59iua2rsejtdhbna06qr6fbn4m
       clientSecret: $oidc.cognito.clientSecret
       requestedScopes:
         - openid
@@ -25,11 +27,6 @@ configs:
       requestedIDTokenClaims:
         cognito:groups:
           essential: true
-  
-  # Store the Cognito client secret
-  secret:
-    extra:
-      oidc.cognito.clientSecret: <YOUR_COGNITO_APP_CLIENT_SECRET>
   
   # RBAC Configuration
   rbac:
@@ -65,6 +62,13 @@ configs:
       g, argocd-admins, role:admin
 
 server:
+  serviceAccount:
+    create: true
+    annotations:
+      eks.amazonaws.com/role-arn: arn:aws:iam::803669523933:role/argocd-crossaccount-manager-us-east-1
+  autoscaling:
+    enabled: true
+    minReplicas: 2
   ingress:
     enabled: true
     controller: aws
@@ -88,14 +92,26 @@ server:
 
 redis-ha:
   enabled: true
+  # Apply tolerations to redis-ha server StatefulSet
+  tolerations:
+    - key: CriticalAddonsOnly
+      operator: Exists
+      effect: NoSchedule
+  # Apply tolerations to HAProxy pods
+  haproxy:
+    tolerations:
+      - key: CriticalAddonsOnly
+        operator: Exists
+        effect: NoSchedule
+  # Apply to hardAntiAffinity (required for scheduling)
+  hardAntiAffinity: false
 
 controller:
+  serviceAccount:
+    create: true
+    annotations:
+      eks.amazonaws.com/role-arn: arn:aws:iam::803669523933:role/argocd-crossaccount-manager-us-east-1
   replicas: 1
-
-server:
-  autoscaling:
-    enabled: true
-    minReplicas: 2
 
 repoServer:
   autoscaling:
