@@ -11,10 +11,16 @@ metadata:
     {{- with .Values.server.httproute.labels }}
       {{- toYaml . | nindent 4 }}
     {{- end }}
-  {{- with .Values.server.httproute.annotations }}
   annotations:
+    {{- with .Values.server.httproute.externalDNSHostname }}
+    external-dns.alpha.kubernetes.io/hostname: {{ . | quote }}
+    {{- end }}
+    {{- with .Values.server.httproute.externalDNSTarget }}
+    external-dns.alpha.kubernetes.io/target: {{ . | quote }}
+    {{- end }}
+    {{- with .Values.server.httproute.annotations }}
     {{- toYaml . | nindent 4 }}
-  {{- end }}
+    {{- end }}
 spec:
   parentRefs:
     {{- with .Values.server.httproute.parentRefs }}

@@ -798,11 +798,15 @@ server:
     enabled: true
     # -- Additional HTTPRoute labels
     labels: {}
-    # -- Additional HTTPRoute annotations
-    annotations:
-      # external-dns creates a DNS CNAME record for this hostname pointing to the gateway
-      external-dns.alpha.kubernetes.io/hostname: "argo-workflows.example.rvohealth.com"
-      external-dns.alpha.kubernetes.io/target: "rp-ingress.example.rvohealth.com"
+    # -- Additional HTTPRoute annotations (for custom annotations only).
+    # Do NOT put external-dns annotations here — use externalDNSHostname and externalDNSTarget below.
+    annotations: {}
+    # -- Hostname for external-dns to register as a DNS CNAME record.
+    # Maps to annotation: external-dns.alpha.kubernetes.io/hostname
+    externalDNSHostname: "argo-workflows.example.rvohealth.com"
+    # -- The gateway/ALB CNAME that external-dns points the hostname at.
+    # Maps to annotation: external-dns.alpha.kubernetes.io/target
+    externalDNSTarget: "rp-ingress.example.rvohealth.com"
     # -- Gateway API parentRefs for the HTTPRoute
     ## Must reference an existing Gateway
     # @default -- `[]` (See [values.yaml])
