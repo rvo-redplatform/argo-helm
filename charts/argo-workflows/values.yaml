@@ -87,7 +87,7 @@ workflow:
   namespace:
   serviceAccount:
     # -- Specifies whether a service account should be created
-    create: false
+    create: true
     # -- Labels applied to created service account
     labels: {}
     # -- Annotations applied to created service account
@@ -103,7 +103,7 @@ workflow:
     # -- Allows permissions for the Argo Agent. Only required if using http/plugin templates
     agentPermissions: false
     # -- Allows permissions for the Argo Artifact GC pod. Only required if using artifact gc
-    artifactGC: false
+    artifactGC: true
     # -- Extra service accounts to be added to the RoleBinding
     serviceAccounts: []
       # - name: my-service-account
@@ -120,13 +120,13 @@ controller:
     # -- Image tag for the workflow controller. Defaults to `.Values.images.tag`.
     tag: ""
   # -- parallelism dictates how many workflows can be running at the same time
-  parallelism:
+  parallelism: 50
   # -- Globally limits the rate at which pods are created.
   # This is intended to mitigate flooding of the Kubernetes API server by workflows with a large amount of
   # parallel nodes.
-  resourceRateLimit: {}
-    # limit: 10
-    # burst: 1
+  resourceRateLimit:
+    limit: 20
+    burst: 5
 
   rbac:
     # -- Adds Role and RoleBinding for the controller.
@@ -161,7 +161,7 @@ controller:
   # podPortName: http
   metricsConfig:
     # -- Enables prometheus metrics server
-    enabled: false
+    enabled: true
     # -- Path is the path where metrics are emitted. Must start with a "/".
     path: /metrics
     # -- Frequency at which prometheus scrapes metrics
@@ -249,14 +249,12 @@ controller:
   # -- Default values that will apply to all Workflows from this controller, unless overridden on the Workflow-level.
   # Only valid for 2.7+
   ## See more: https://argo-workflows.readthedocs.io/en/stable/default-workflow-specs/
-  workflowDefaults: {}
-  #   spec:
-  #     ttlStrategy:
-  #       secondsAfterCompletion: 86400
-  #     # Ref: https://argo-workflows.readthedocs.io/en/stable/artifact-repository-ref/
-  #     artifactRepositoryRef:
-  #       configMap: my-artifact-repository # default is "artifact-repositories"
-  #       key: v2-s3-artifact-repository # default can be set by the `workflows.argoproj.io/default-artifact-repository` annotation in config map.
+  workflowDefaults:
+    spec:
+      ttlStrategy:
+        secondsAfterCompletion: 86400    # 24h — clean up completed workflows
+        secondsAfterSuccess: 86400       # 24h
+        secondsAfterFailure: 604800      # 7d — keep failures longer for debugging
 
   # -- Number of workflow workers
   workflowWorkers: # 32
@@ -342,9 +340,7 @@ controller:
     # -- Set the glog logging level
     globallevel: "0"
     # -- Set the logging format (one of: `text`, `json`)
-    format: "text"
-
-  # -- Service type of the controller Service
+    format: "json"
   serviceType: ClusterIP
   # -- Annotations to be applied to the controller Service
   serviceAnnotations: {}
@@ -356,7 +352,13 @@ controller:
   loadBalancerSourceRanges: []
 
   # -- Resource limits and requests for the controller
-  resources: {}
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
 
   # -- Configure liveness [probe] for the controller
   # @default -- See [values.yaml]
@@ -387,9 +389,8 @@ controller:
 
   pdb:
     # -- Configure [Pod Disruption Budget] for the controller pods
-    enabled: false
-    # minAvailable: 1
-    # maxUnavailable: 1
+    enabled: true
+    minAvailable: 1
 
   # -- [Node selector]
   nodeSelector:
@@ -401,13 +402,10 @@ controller:
 
   # -- Assign custom [TopologySpreadConstraints] rules to the workflow controller
   ## Ref: https://kubernetes.io/docs/concepts/workloads/pods/pod-topology-spread-constraints/
-  ## If labelSelector is left out, it will default to the labelSelector configuration of the deployment
-  topologySpreadConstraints: []
-  # - maxSkew: 1
-  #   topologyKey: topology.kubernetes.io/zone
-  #   whenUnsatisfiable: DoNotSchedule
-
-  # -- Leverage a PriorityClass to ensure your pods survive resource shortages.
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: DoNotSchedule
   ## ref: https://kubernetes.io/docs/concepts/configuration/pod-priority-preemption/
   priorityClassName: ""
 
@@ -433,22 +431,20 @@ controller:
   extraInitContainers: []
 
   # -- Workflow retention by number of workflows
-  retentionPolicy: {}
-  #  completed: 10
-  #  failed: 3
-  #  errored: 3
+  retentionPolicy:
+    completed: 100
+    failed: 50
+    errored: 50
 
   nodeEvents:
     # -- Enable to emit events on node completion.
-    ## This can take up a lot of space in k8s (typically etcd) resulting in errors when trying to create new events:
-    ## "Unable to create audit event: etcdserver: mvcc: database space exceeded"
-    enabled: true
+    ## Disabled to prevent etcd bloat from high-volume workflow node events.
+    enabled: false
 
   workflowEvents:
     # -- Enable to emit events on workflow status changes.
-    ## This can take up a lot of space in k8s (typically etcd), resulting in errors when trying to create new events:
-    ## "Unable to create audit event: etcdserver: mvcc: database space exceeded"
-    enabled: true
+    ## Disabled to prevent etcd bloat from high-volume workflow status events.
+    enabled: false
 
   # -- Configure when workflow controller runs in a different k8s cluster with the workflow workloads,
   # or needs to communicate with the k8s apiserver using an out-of-cluster kubeconfig secret.
@@ -508,9 +504,9 @@ controller:
 
   failedPodRestart:
     # -- Enable to restart of pods that fail before entering Running state.
-    ## This is useful for recovering from transient infrastructure issues like node eviction due to DiskPressure or MemoryPressure without requiring a retryStrategy on every template.
-    ## ref: https://argo-workflows.readthedocs.io/en/latest/pod-restarts/
-    enabled: false
+    ## Useful for recovering from transient infrastructure issues (node eviction, DiskPressure, etc.)
+    ## without requiring a retryStrategy on every template.
+    enabled: true
     # -- Maximum number of automatic restarts per node before giving up.
     maxRestarts: 3
 
@@ -621,42 +617,40 @@ server:
   # -- Source ranges to allow access to service from. Only applies to service type `LoadBalancer`
   loadBalancerSourceRanges: []
   # -- Resource limits and requests for the server
-  resources: {}
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
   # -- The number of server pods to run
-  replicas: 1
+  replicas: 2
   # -- The number of revisions to keep.
   revisionHistoryLimit: 10
   ## Argo Server Horizontal Pod Autoscaler
   autoscaling:
     # -- Enable Horizontal Pod Autoscaler ([HPA]) for the Argo Server
-    enabled: false
+    enabled: true
     # -- Minimum number of replicas for the Argo Server [HPA]
-    minReplicas: 1
+    minReplicas: 2
     # -- Maximum number of replicas for the Argo Server [HPA]
     maxReplicas: 5
     # -- Average CPU utilization percentage for the Argo Server [HPA]
     targetCPUUtilizationPercentage: 50
     # -- Average memory utilization percentage for the Argo Server [HPA]
     targetMemoryUtilizationPercentage: 50
-    # -- Configures the scaling behavior of the target in both Up and Down directions.
-    # This is only available on HPA apiVersion `autoscaling/v2beta2` and newer
-    behavior: {}
-      # scaleDown:
-      #  stabilizationWindowSeconds: 300
-      #  policies:
-      #   - type: Pods
-      #     value: 1
-      #     periodSeconds: 180
-      # scaleUp:
-      #   stabilizationWindowSeconds: 300
-      #   policies:
-      #   - type: Pods
-      #     value: 2
+    behavior:
+      scaleDown:
+        stabilizationWindowSeconds: 300
+        policies:
+          - type: Pods
+            value: 1
+            periodSeconds: 180
   pdb:
     # -- Configure [Pod Disruption Budget] for the server pods
-    enabled: false
-    # minAvailable: 1
-    # maxUnavailable: 1
+    enabled: true
+    minAvailable: 1
 
   # -- [Node selector]
   nodeSelector:
@@ -670,11 +664,10 @@ server:
 
   # -- Assign custom [TopologySpreadConstraints] rules to the argo server
   ## Ref: https://kubernetes.io/docs/concepts/workloads/pods/pod-topology-spread-constraints/
-  ## If labelSelector is left out, it will default to the labelSelector configuration of the deployment
-  topologySpreadConstraints: []
-  # - maxSkew: 1
-  #   topologyKey: topology.kubernetes.io/zone
-  #   whenUnsatisfiable: DoNotSchedule
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: DoNotSchedule
 
   # -- Leverage a PriorityClass to ensure your pods survive resource shortages
   ## ref: https://kubernetes.io/docs/concepts/configuration/pod-priority-preemption/
@@ -695,7 +688,8 @@ server:
 
   # -- A list of supported authentication modes. Available values are `server`, `client`, or `sso`. If you provide sso, please configure `.Values.server.sso` as well.
   ## Ref: https://argo-workflows.readthedocs.io/en/stable/argo-server-auth-mode/
-  authModes: []
+  authModes:
+    - sso
 
   # -- Extra arguments to provide to the Argo server binary.
   ## Ref: https://argo-workflows.readthedocs.io/en/stable/argo-server/#options
@@ -707,7 +701,7 @@ server:
     # -- Set the glog logging level
     globallevel: "0"
     # -- Set the logging format (one of: `text`, `json`)
-    format: "text"
+    format: "json"
 
   # -- Volume to be mounted in Pods for temporary files.
   tmpVolume:
@@ -782,7 +776,7 @@ server:
     enabled: false
     # -- Domains for the Google Managed Certificate
     domains:
-    - argoworkflows.example.com
+      - argoworkflows.example.com
 
   ## Create a Google FrontendConfig Custom Resource, for use with the GKE Ingress Controller
   ## https://cloud.google.com/kubernetes-engine/docs/how-to/ingress-features#configuring_ingress_features_through_frontendconfig_parameters
@@ -797,28 +791,28 @@ server:
   #     responseCodeName: RESPONSE_CODE
 
   # Gateway API HTTPRoute configuration
-  # NOTE: Gateway API support is in EXPERIMENTAL status
-  # Support depends on your Gateway controller implementation
-  # Some controllers may require additional configuration (e.g., BackendTLSPolicy for HTTPS backends)
-  # Refer to https://gateway-api.sigs.k8s.io/implementations/ for controller-specific details
+  # Routes traffic through the Istio gateway (rp-ingress) fronted by the public ALB.
+  # external-dns reads the annotations to create a DNS CNAME pointing the hostname at the gateway.
   httproute:
     # -- Enable HTTPRoute resource for Argo Workflows server (Gateway API)
-    enabled: false
+    enabled: true
     # -- Additional HTTPRoute labels
     labels: {}
     # -- Additional HTTPRoute annotations
-    annotations: {}
+    annotations:
+      # external-dns creates a DNS CNAME record for this hostname pointing to the gateway
+      external-dns.alpha.kubernetes.io/hostname: "argo-workflows.example.rvohealth.com"
+      external-dns.alpha.kubernetes.io/target: "rp-ingress.example.rvohealth.com"
     # -- Gateway API parentRefs for the HTTPRoute
     ## Must reference an existing Gateway
     # @default -- `[]` (See [values.yaml])
-    parentRefs: []
-      # - name: example-gateway
-      #   namespace: example-gateway-namespace
-      #   sectionName: https
+    parentRefs:
+      - name: rp-ingress
+        namespace: istio-ingress
     # -- List of hostnames for the HTTPRoute
     # @default -- `[]` (See [values.yaml])
-    hostnames: []
-      # - argoworkflows.example.com
+    hostnames:
+      - "argo-workflows.example.rvohealth.com"
     # -- HTTPRoute rules configuration
     # @default -- `[]` (See [values.yaml])
     rules:
@@ -826,12 +820,6 @@ server:
           - path:
               type: PathPrefix
               value: /
-        # filters: []
-        #   - type: RequestHeaderModifier
-        #     requestHeaderModifier:
-        #       add:
-        #         - name: X-Custom-Header
-        #           value: custom-value
 
   # Gateway API BackendTLSPolicy configuration
   # NOTE: BackendTLSPolicy support is in EXPERIMENTAL status
@@ -868,11 +856,16 @@ server:
     enableEditing: true
 
   # SSO configuration when SSO is specified as a server auth mode.
+  # Uses the same AWS Cognito user pool as ArgoCD (us-east-1_VAPDmmfVL).
+  # clientId and clientSecret are read from a Kubernetes Secret — create it before deploying:
+  #   kubectl create secret generic argo-server-sso -n argo-workflows \
+  #     --from-literal=client-id=59iua2rsejtdhbna06qr6fbn4m \
+  #     --from-literal=client-secret=<same-cognito-app-client-secret-as-argocd>
   sso:
     # -- Create SSO configuration. If you set `true` , please also set `.Values.server.authModes` as `sso`.
-    enabled: false
-    # -- The root URL of the OIDC identity provider
-    issuer: https://accounts.google.com
+    enabled: true
+    # -- The root URL of the OIDC identity provider (AWS Cognito user pool issuer)
+    issuer: "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_VAPDmmfVL"
     clientId:
       # -- Name of secret to retrieve the app OIDC client ID
       name: argo-server-sso
@@ -884,37 +877,28 @@ server:
       # -- Key of a secret to retrieve the app OIDC client secret
       key: client-secret
     # -- The OIDC redirect URL. Should be in the form <argo-root-url>/oauth2/callback.
-    redirectUrl: ""
+    redirectUrl: "https://argo-workflows.example.rvohealth.com/oauth2/callback"
     rbac:
       # -- Adds ServiceAccount Policy to server (Cluster)Role.
       enabled: true
-    # -- Whitelist to allow server to fetch Secrets
-    ## When present, restricts secrets the server can read to a given list.
-    ## You can use it to restrict the server to only be able to access the
-    ## service account token secrets that are associated with service accounts
-    ## used for authorization.
       secretWhitelist: []
     # -- Scopes requested from the SSO ID provider
-    ## The 'groups' scope requests group membership information, which is usually used for authorization decisions.
-    scopes: []
-      # - groups
+    scopes:
+      - openid
+      - profile
+      - email
     # -- Define how long your login is valid for (in hours)
-    ## If omitted, defaults to 10h.
-    sessionExpiry: ""
+    sessionExpiry: "10h"
+    # -- Override claim name for OIDC groups (Cognito returns groups as "cognito:groups")
+    customGroupClaimName: "cognito:groups"
     # -- Alternate root URLs that can be included for some OIDC providers
     issuerAlias: ""
-    # -- Override claim name for OIDC groups
-    customGroupClaimName: ""
     # -- Specify the user info endpoint that contains the groups claim
-    ## Configure this if your OIDC provider provides groups information only using the user-info endpoint (e.g. Okta)
     userInfoPath: ""
     # -- Skip TLS verification for the HTTP client
     insecureSkipVerify: false
     # -- Filter the groups returned by the OIDC provider
-    ## A logical "OR" is used between each regex in the list
     filterGroupsRegex: []
-      # - ".*argo-wf.*"
-      # - ".*argo-workflow.*"
 
   # -- Extra containers to be added to the server deployment
   extraContainers: []
@@ -932,7 +916,7 @@ server:
   ## Ref: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
   livenessProbe:
     # -- Enable Kubernetes liveness probe for server
-    enabled: false
+    enabled: true
     httpGet:
       # -- Http port to use for the liveness probe
       port: 2746
