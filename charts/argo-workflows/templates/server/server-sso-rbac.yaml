@@ -1,0 +1,62 @@
+{{- if and .Values.server.enabled .Values.server.sso.enabled .Values.server.sso.rbac.enabled -}}
+{{- $fullName := include "argo-workflows.fullname" . -}}
+{{- $namespace := include "argo-workflows.namespace" . -}}
+{{- $adminGroup := .Values.server.sso.rbac.groups.admin -}}
+{{- $userGroup := .Values.server.sso.rbac.groups.user -}}
+---
+# ServiceAccount for SSO admin users
+# Mapped to Cognito group: {{ $adminGroup }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argo-workflows-admin
+  namespace: {{ $namespace | quote }}
+  labels:
+    {{- include "argo-workflows.labels" (dict "context" . "component" .Values.server.name "name" .Values.server.name) | nindent 4 }}
+  annotations:
+    workflows.argoproj.io/rbac-rule: "'{{ $adminGroup }}' in groups"
+    workflows.argoproj.io/rbac-rule-precedence: "1"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $fullName }}-sso-admin
+  labels:
+    {{- include "argo-workflows.labels" (dict "context" . "component" .Values.server.name "name" .Values.server.name) | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $fullName }}-admin
+subjects:
+  - kind: ServiceAccount
+    name: argo-workflows-admin
+    namespace: {{ $namespace | quote }}
+---
+# ServiceAccount for SSO standard users
+# Mapped to Cognito group: {{ $userGroup }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argo-workflows-user
+  namespace: {{ $namespace | quote }}
+  labels:
+    {{- include "argo-workflows.labels" (dict "context" . "component" .Values.server.name "name" .Values.server.name) | nindent 4 }}
+  annotations:
+    workflows.argoproj.io/rbac-rule: "'{{ $userGroup }}' in groups"
+    workflows.argoproj.io/rbac-rule-precedence: "2"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $fullName }}-sso-user
+  labels:
+    {{- include "argo-workflows.labels" (dict "context" . "component" .Values.server.name "name" .Values.server.name) | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $fullName }}-view
+subjects:
+  - kind: ServiceAccount
+    name: argo-workflows-user
+    namespace: {{ $namespace | quote }}
+{{- end }}

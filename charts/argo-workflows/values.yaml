@@ -886,6 +886,11 @@ server:
       # -- Adds ServiceAccount Policy to server (Cluster)Role.
       enabled: true
       secretWhitelist: []
+      # -- Cognito group to ServiceAccount mappings for SSO authorization.
+      # Each group gets its own ServiceAccount bound to the corresponding ClusterRole.
+      groups:
+        admin: "argocd-admins"
+        user: "argocd-users"
     # -- Scopes requested from the SSO ID provider
     scopes:
       - openid
