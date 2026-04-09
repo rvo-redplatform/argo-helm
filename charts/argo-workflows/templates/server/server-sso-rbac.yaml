@@ -4,7 +4,7 @@
 {{- $adminGroup := .Values.server.sso.rbac.groups.admin -}}
 {{- $userGroup := .Values.server.sso.rbac.groups.user -}}
 ---
-# ServiceAccount for SSO admin users
+# ServiceAccount for SSO admin users.
 # Mapped to Cognito group: {{ $adminGroup }}
 apiVersion: v1
 kind: ServiceAccount
@@ -16,6 +16,21 @@ metadata:
   annotations:
     workflows.argoproj.io/rbac-rule: "'{{ $adminGroup }}' in groups"
     workflows.argoproj.io/rbac-rule-precedence: "1"
+---
+# Long-lived token secret for argo-workflows-admin.
+# Required for Argo Server to impersonate this SA on behalf of SSO users.
+# Kubernetes 1.24+ no longer auto-creates SA tokens — this must be explicit.
+# Discovery by name: Argo looks for a secret named {sa}.service-account-token
+apiVersion: v1
+kind: Secret
+metadata:
+  name: argo-workflows-admin.service-account-token
+  namespace: {{ $namespace | quote }}
+  labels:
+    {{- include "argo-workflows.labels" (dict "context" . "component" .Values.server.name "name" .Values.server.name) | nindent 4 }}
+  annotations:
+    kubernetes.io/service-account.name: argo-workflows-admin
+type: kubernetes.io/service-account-token
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -32,7 +47,7 @@ subjects:
     name: argo-workflows-admin
     namespace: {{ $namespace | quote }}
 ---
-# ServiceAccount for SSO standard users
+# ServiceAccount for SSO standard users.
 # Mapped to Cognito group: {{ $userGroup }}
 apiVersion: v1
 kind: ServiceAccount
@@ -44,6 +59,19 @@ metadata:
   annotations:
     workflows.argoproj.io/rbac-rule: "'{{ $userGroup }}' in groups"
     workflows.argoproj.io/rbac-rule-precedence: "2"
+---
+# Long-lived token secret for argo-workflows-user.
+# Same requirement as above — must be explicit on Kubernetes 1.24+.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: argo-workflows-user.service-account-token
+  namespace: {{ $namespace | quote }}
+  labels:
+    {{- include "argo-workflows.labels" (dict "context" . "component" .Values.server.name "name" .Values.server.name) | nindent 4 }}
+  annotations:
+    kubernetes.io/service-account.name: argo-workflows-user
+type: kubernetes.io/service-account-token
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
