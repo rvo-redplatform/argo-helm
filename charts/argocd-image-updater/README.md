@@ -147,6 +147,7 @@ The `config.registries` value can be used exactly as it looks in the documentati
 | resources | object | `{}` | Pod memory and cpu resource settings for the deployment |
 | securityContext | object | See [values.yaml] | Security context settings for the deployment |
 | service.annotations | object | `{}` | Service annotations |
+| service.enabled | bool | `false` | Enable a Service for the webhook endpoint. A Service is created when this is set to true or when `ingress.enabled` is true |
 | service.externalIPs | list | `[]` | Service external IPs |
 | service.externalTrafficPolicy | string | `"Cluster"` | Denotes if this Service desires to route external traffic to node-local or cluster-wide endpoints |
 | service.labels | object | `{}` | Service labels |
@@ -154,7 +155,6 @@ The `config.registries` value can be used exactly as it looks in the documentati
 | service.loadBalancerIP | string | `""` | LoadBalancer will get created with the IP specified in this field |
 | service.loadBalancerSourceRanges | list | `[]` | Source IP ranges to allow access to service from |
 | service.nodePortHttp | int | `30080` | Service http port for NodePort service type (only if `service.type` is set to "NodePort") |
-| service.nodePortHttps | int | `30443` | Service https port for NodePort service type (only if `service.type` is set to "NodePort") |
 | service.port | int | `8080` | Service http port |
 | service.servicePortHttpName | string | `"server-port"` | Service http port name, can be used to route traffic via istio |
 | service.sessionAffinity | string | `"None"` | Used to maintain session affinity. Supports `ClientIP` and `None` |
