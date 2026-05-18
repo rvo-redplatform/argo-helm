@@ -14,6 +14,8 @@ configs:
   cm:
     # Disable local admin user - force SSO login only
     admin.enabled: false
+    # SSO session duration - require re-login after 8 hours
+    server.session.duration: "8h"
     # OIDC configuration for AWS Cognito
     oidc.config: |
       name: AWS Cognito
