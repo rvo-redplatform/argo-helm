@@ -7,8 +7,7 @@ Argo Helm is a collection of **community maintained** charts. Therefore we rely 
 All submissions, including submissions by project members, require review. We use GitHub pull requests for this purpose. Consult [GitHub Help](https://help.github.com/articles/about-pull-requests/) for more information on using pull requests. See the above stated requirements for PR on this project.
 
 > **Note**
-> Please create a separate Pull Request for each chart.
-> e.g: If your changes involve both argo-cd and argo-rollouts, please submit one PR for argo-cd and another separate.
+> Please start your pull request in draft mode until all checks pass. This allows you to iterate on your PR if failures occur without notifying maintainers to review it until it is ready. Thank you for your understanding and cooperation.
 
 ### Pull Request Title Linting
 
@@ -57,6 +56,9 @@ When selecting new application versions ensure you make the following changes:
 
 * `values.yaml`: Bump all instances of the container image version
 * `Chart.yaml`: Ensure `appVersion` matches the above container image and bump `version`
+
+When you bump a chart dependency such as `redis-ha`, also update its sha256 in `.github/configs/chart-dependencies.sha256`.
+CI runs `helm dependency build` and then `./scripts/verify-chart-dependencies.sh`, which fails until the digest matches.
 
 Please ensure chart version changes adhere to semantic versioning standards:
 

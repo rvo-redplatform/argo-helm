@@ -9,7 +9,7 @@
 set -euo pipefail
 
 if ! command -v jq &> /dev/null; then
-    echo "Error: jq is required but not installed"
+    echo "Error: jq is required but not installed" >&2
     exit 1
 fi
 
@@ -61,8 +61,10 @@ process_crd() {
 {{- if .Values.crds.install }}
 HEADER
 
-        # Remove leading "---" if present, then process the YAML
-        sed '/^---$/d' "$src_file" | awk '
+        # Remove leading "---" if present, escape Go template syntax that may
+        # appear in upstream CRD descriptions (e.g. "{{args.foo}}" examples,
+        # which Helm would otherwise try to parse), then process the YAML
+        sed '/^---$/d' "$src_file" | sed 's/{{/{{ "{{" }}/g' | awk '
         BEGIN { state = "init"; name_line = "" }
 
         # Skip auto-generated comment
@@ -125,7 +127,7 @@ rm -f "$CRD_DIR"/*-crd.yml
 crd_files=$(get_crd_files)
 
 if [[ -z "$crd_files" ]]; then
-    echo "  Error: Failed to fetch CRD file list"
+    echo "  Error: Failed to fetch CRD file list" >&2
     exit 1
 fi
 
@@ -140,7 +142,7 @@ while IFS= read -r crd_file; do
 
     echo "  Downloading $crd_file -> $local_name..."
     if ! curl -sSfL "$url" -o "$tmp_file"; then
-        echo "    Warning: Failed to download $crd_file"
+        echo "    Warning: Failed to download $crd_file" >&2
         continue
     fi
 

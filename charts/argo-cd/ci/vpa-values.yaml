@@ -5,6 +5,13 @@ crds:
 controller:
   vpa:
     enabled: true
+    recommenders:
+      - name: test-recommender
+    startupBoost:
+      cpu:
+        type: Factor
+        factor: 2
+        durationSeconds: 10
 
 server:
   vpa:
