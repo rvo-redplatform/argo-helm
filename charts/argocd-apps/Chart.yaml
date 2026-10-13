@@ -2,7 +2,7 @@ apiVersion: v2
 name: argocd-apps
 description: A Helm chart for managing additional Argo CD Applications and Projects
 type: application
-version: 2.0.4
+version: 2.0.6
 home: https://github.com/argoproj/argo-helm
 icon: https://argo-cd.readthedocs.io/en/stable/assets/logo.png
 keywords:
@@ -18,4 +18,4 @@ annotations:
     url: https://argoproj.github.io/argo-helm/pgp_keys.asc
   artifacthub.io/changes: |
     - kind: fixed
-      description: Allow nullified top level items. E.g. allows the removal of a default Application in a specific environment by setting it to null.
+      description: Quote AppProject descriptions to preserve string values
